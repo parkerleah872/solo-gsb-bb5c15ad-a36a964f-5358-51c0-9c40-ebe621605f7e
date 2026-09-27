@@ -39,7 +39,13 @@ export function buildSegments(
       events.push({ pos: iv.end, type: 'end', index: i })
     }
   }
-  events.sort((a, b) => a.pos - b.pos || (a.type === 'end' ? -1 : 1))
+  // 同位置先结束后开始（半开区间 [start, end)：端点相接处旧标注退出、新标注加入）；
+  // 同位置同类型事件保持输入顺序（稳定排序），比较结果须满足反对称性
+  events.sort((a, b) => {
+    if (a.pos !== b.pos) return a.pos - b.pos
+    if (a.type !== b.type) return a.type === 'end' ? -1 : 1
+    return a.index - b.index
+  })
 
   // 活动区间下标小顶堆 + 懒删除：快照按下标升序弹出即输入顺序，
   // 用于颜色叠加与点击检查，与逐段 filter 的旧行为一致

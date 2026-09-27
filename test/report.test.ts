@@ -285,4 +285,58 @@ function baseInput(): ReportInput {
   console.log('  ✓ 关系基数审计：源端/目标端违规标记、名额文案与统计')
 }
 
+// 9. 非空原文但没有有效已绑定区间（无标注 / 仅剩待处理）：原文区仍输出完整原文，
+//    不出现「原文为空」占位；空原文时才输出空正文
+for (const [label, annotations] of [
+  ['无标注', []],
+  [
+    '仅剩待处理标注',
+    [
+      mkAnn({
+        id: 'p1',
+        quote: '已消失的引文XYZ',
+        start: 0,
+        end: 0,
+        status: 'pending',
+        pendingReason: '原文中已找不到该引文，需要手动重新选择',
+      }),
+    ],
+  ],
+] as const) {
+  const report = buildReviewReport(
+    {
+      title: '无有效区间文档',
+      text,
+      annotations: annotations as Annotation[],
+      conflictRules: [],
+      ignoredConflicts: [],
+      coverageTags: [],
+    },
+    now,
+  )
+  // 去掉内嵌样式表，避免样式文本干扰正文匹配
+  const bodyHtml = report.html.replace(/<style>[\s\S]*?<\/style>/, '')
+  const m = bodyHtml.match(/<article class="rep-text">([\s\S]*?)<\/article>/)
+  assert.ok(m, `${label}时应有原文区`)
+  assert.strictEqual(m![1], text, `${label}时原文区应是无标注的完整原文一段`)
+  assert.ok(!bodyHtml.includes('（原文为空）'), `${label}时不应显示原文为空占位`)
+}
+{
+  const report = buildReviewReport(
+    {
+      title: '真空文档',
+      text: '',
+      annotations: [],
+      conflictRules: [],
+      ignoredConflicts: [],
+      coverageTags: [],
+    },
+    now,
+  )
+  const bodyHtml = report.html.replace(/<style>[\s\S]*?<\/style>/, '')
+  assert.ok(bodyHtml.includes('<span class="rep-muted">（原文为空）</span>'),
+    '空原文才显示原文为空占位')
+}
+console.log('  ✓ 非空原文无有效已绑定区间时报告正文仍完整输出；空原文才为空')
+
 console.log('\n审阅报告生成测试全部通过')

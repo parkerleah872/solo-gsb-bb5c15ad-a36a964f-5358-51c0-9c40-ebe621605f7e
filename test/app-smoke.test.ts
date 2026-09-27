@@ -2125,4 +2125,135 @@ console.log('  ✓ 旧数据无损兼容并自动补齐冲突字段、标注关�
 root4.unmount()
 container4.remove()
 container3.remove()
+
+// 新录入原文（无任何已绑定标注）→ 阅读视图完整显示且可在普通文本上拖选创建首条标注；
+// 仅剩待处理标注时正文同样不消失，且可拖选发起重新绑定
+{
+  // TextView 的 mouseup 处理器读取选区几何；jsdom 的 Range 未实现 getBoundingClientRect
+  if (typeof window.Range.prototype.getBoundingClientRect !== 'function') {
+    window.Range.prototype.getBoundingClientRect = function getBoundingClientRect() {
+      return {
+        top: 0, bottom: 0, left: 0, right: 0, x: 0, y: 0, width: 0, height: 0, toJSON() {},
+      } as DOMRect
+    }
+  }
+
+  const { setSelectionRange } = await import('../src/lib/dom')
+  const setNativeValue = (el: HTMLInputElement | HTMLTextAreaElement, v: string) => {
+    const proto =
+      el instanceof window.HTMLTextAreaElement
+        ? window.HTMLTextAreaElement.prototype
+        : window.HTMLInputElement.prototype
+    Object.getOwnPropertyDescriptor(proto, 'value')!.set!.call(el, v)
+    el.dispatchEvent(new window.Event('input', { bubbles: true }))
+  }
+  const clickButton = (rootEl: ParentNode, text: string) => {
+    const btn = [...rootEl.querySelectorAll('button')].find(
+      (b) => b.textContent?.trim() === text,
+    ) as HTMLButtonElement | undefined
+    assert.ok(btn, `应存在按钮「${text}」`)
+    btn!.click()
+    return btn!
+  }
+  const wait = () => new Promise<void>((resolve) => setTimeout(resolve, 150))
+
+  // 清掉旧文档：空存储挂载 → 编辑模式
+  localStorage.removeItem('anchor-annotation-console:v1')
+  const cf = document.createElement('div')
+  cf.id = 'rootfresh'
+  document.body.appendChild(cf)
+  const fr = createRoot(cf)
+  await new Promise<void>((resolve) => {
+    fr.render(React.createElement(React.StrictMode, null, React.createElement(App)))
+    setTimeout(resolve, 300)
+  })
+
+  const freshText = '这是全新录入的原文，全部是普通文字，还没有任何已绑定标注。'
+  assert.ok(cf.querySelector('.editor-textarea'), '空文档应直接进入编辑模式')
+  setNativeValue(cf.querySelector('.editor-textarea') as HTMLTextAreaElement, freshText)
+  clickButton(cf, '完成编辑')
+  await wait()
+
+  const view = cf.querySelector('.text-view') as HTMLElement | null
+  assert.ok(view, '完成编辑后应渲染阅读视图（而非空白）')
+  assert.strictEqual(view!.textContent, freshText, '无标注时阅读视图应完整显示原文')
+  assert.strictEqual(view!.querySelectorAll('mark.hl').length, 0, '不应有任何高亮段')
+
+  // 在普通文本（无高亮）上拖选 → 弹出首条标注创建表单
+  assert.ok(setSelectionRange(view!, 5, 11), '应能在普通文本上设置选区')
+  view!.dispatchEvent(new window.MouseEvent('mouseup', { bubbles: true }))
+  await wait()
+  assert.ok(cf.querySelector('.annotation-form'), '普通文本拖选后应弹出标注创建表单')
+  console.log('  ✓ 新录入原文：阅读视图完整显示，普通文本可拖选创建首条标注')
+
+  // 提交首条标注后它出现在原文上
+  setNativeValue(cf.querySelector('.annotation-form .form-note') as HTMLTextAreaElement, '首条备注')
+  cf.querySelector('.annotation-form')!.dispatchEvent(
+    new window.Event('submit', { bubbles: true, cancelable: true }),
+  )
+  await wait()
+  assert.ok(!cf.querySelector('.annotation-form'), '提交后表单关闭')
+  assert.ok(cf.querySelector('.text-view mark.hl'), '首条标注应渲染为高亮')
+  const stored1 = JSON.parse(localStorage.getItem('anchor-annotation-console:v1')!)
+  assert.strictEqual(stored1.annotations.length, 1)
+  assert.strictEqual(stored1.annotations[0].status, 'bound')
+
+  // 仅剩待处理标注：挂载一份只有 pending 标注的文档，正文仍完整、可发起重绑
+  const onlyPending = {
+    title: '仅待处理文档',
+    text: freshText,
+    updatedAt: Date.now(),
+    annotations: [
+      {
+        id: 'pend_only',
+        quote: '消失的引文ZZZ',
+        start: 0,
+        end: 0,
+        note: '',
+        tags: [],
+        status: 'pending',
+        createdAt: 1,
+        updatedAt: 1,
+        contextBefore: '',
+        contextAfter: '',
+        pendingReason: '原文中已找不到该引文，需要手动重新选择',
+      },
+    ],
+  }
+  fr.unmount()
+  cf.remove()
+  localStorage.setItem('anchor-annotation-console:v1', JSON.stringify(onlyPending))
+  const cp2 = document.createElement('div')
+  cp2.id = 'rootpendonly2'
+  document.body.appendChild(cp2)
+  const pr2 = createRoot(cp2)
+  await new Promise<void>((resolve) => {
+    pr2.render(React.createElement(React.StrictMode, null, React.createElement(App)))
+    setTimeout(resolve, 300)
+  })
+
+  const viewP = cp2.querySelector('.text-view') as HTMLElement | null
+  assert.ok(viewP, '仅剩待处理标注时阅读视图不应消失')
+  assert.strictEqual(viewP!.textContent, freshText, '仅剩待处理标注时正文仍应完整显示')
+  assert.strictEqual(viewP!.querySelectorAll('mark.hl').length, 0, '待处理标注不应产生高亮')
+  console.log('  ✓ 仅剩待处理标注：阅读视图仍完整显示原文')
+
+  // 点击「重新选择片段」进入重绑，再在普通文本上拖选 → 重绑确认弹层
+  const rebindBtn = [...cp2.querySelectorAll('button')].find(
+    (b) => b.textContent?.includes('重新选择片段'),
+  ) as HTMLButtonElement | undefined
+  assert.ok(rebindBtn, '待处理标注应提供重新选择片段入口')
+  rebindBtn!.click()
+  await wait()
+  assert.ok(cp2.querySelector('.text-view.rebinding'), '原文应进入重绑十字光标态')
+  assert.ok(setSelectionRange(viewP!, 8, 14), '重绑时应能在普通文本上设置选区')
+  viewP!.dispatchEvent(new window.MouseEvent('mouseup', { bubbles: true }))
+  await wait()
+  assert.ok(cp2.textContent?.includes('确认绑定'), '重绑拖选后应出现确认绑定弹层')
+  console.log('  ✓ 仅剩待处理标注时可在普通文本上拖选重新绑定')
+
+  pr2.unmount()
+  cp2.remove()
+}
+
 console.log('\n全部渲染冒烟测试通过')
