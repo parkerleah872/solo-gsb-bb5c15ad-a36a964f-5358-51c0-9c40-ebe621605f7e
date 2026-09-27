@@ -47,6 +47,22 @@ check('buildSegments：无标注时为整段；空区间被忽略', () => {
   assert.deepStrictEqual(segs[0].annotationIds, [])
 })
 
+check('buildSegments：区间数组为空时输出一段覆盖全文的无标注段（新录入原文场景）', () => {
+  // 新录入原文后没有任何已绑定区间：分段不得为空，否则阅读视图与报告正文都会空白
+  assert.deepStrictEqual(buildSegments(7, []), [
+    { start: 0, end: 7, annotationIds: [] },
+  ])
+})
+
+check('buildSegments：全部区间无效（越界 / 空区间）时同样输出整段无标注原文', () => {
+  const segs = buildSegments(7, [
+    { start: 9, end: 12, id: 'a' }, // 整体超出文末
+    { start: -2, end: 3, id: 'b' }, // 起点为负
+    { start: 4, end: 4, id: 'c' }, // 空区间
+  ])
+  assert.deepStrictEqual(segs, [{ start: 0, end: 7, annotationIds: [] }])
+})
+
 check('buildSegments：端点相接按半开区间处理，不产生叠加也不留空段', () => {
   // [0,3) 与 [3,6) 相接：同位置的结束与开始事件相抵
   const segs = buildSegments(6, [

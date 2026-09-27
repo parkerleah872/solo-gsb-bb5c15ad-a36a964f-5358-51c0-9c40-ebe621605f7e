@@ -204,6 +204,59 @@ function baseInput(): ReportInput {
   console.log('  ✓ 空文档边界')
 }
 
+// 5b. 边界：有原文但零标注时，正文渲染完整原文（新录入原文场景）
+{
+  const freshText = '新录入的原文，还没有任何标注。'
+  const report = buildReviewReport(
+    {
+      title: '无标注文档',
+      text: freshText,
+      annotations: [],
+      conflictRules: [],
+      ignoredConflicts: [],
+      coverageTags: [],
+    },
+    now,
+  )
+  const body =
+    report.html.match(/<article class="rep-text">([\s\S]*?)<\/article>/)?.[1] ?? ''
+  assert.ok(body.includes(freshText), '零标注时报告正文应渲染完整原文')
+  assert.ok(!body.includes('原文为空'), '非空原文不得显示「原文为空」')
+  console.log('  ✓ 零标注时报告正文渲染完整原文')
+}
+
+// 5c. 边界：仅剩待处理标注时，正文仍渲染完整原文
+{
+  const onlyPendingText = '这段原文只剩待处理标注，正文必须完整渲染。'
+  const report = buildReviewReport(
+    {
+      title: '仅待处理文档',
+      text: onlyPendingText,
+      annotations: [
+        mkAnn({
+          id: 'p1',
+          quote: '已经不存在的引文',
+          status: 'pending',
+          tags: ['遗留'],
+          note: '待处理备注',
+          pendingReason: '原文中已找不到该引文，需要手动重新选择',
+        }),
+      ],
+      conflictRules: [],
+      ignoredConflicts: [],
+      coverageTags: [],
+    },
+    now,
+  )
+  const body =
+    report.html.match(/<article class="rep-text">([\s\S]*?)<\/article>/)?.[1] ?? ''
+  assert.ok(body.includes(onlyPendingText), '仅待处理标注时报告正文应渲染完整原文')
+  assert.ok(!body.includes('原文为空'), '非空原文不得显示「原文为空」')
+  assert.strictEqual(report.stats.total, 1)
+  assert.strictEqual(report.stats.pending, 1)
+  console.log('  ✓ 仅待处理标注时报告正文仍渲染完整原文')
+}
+
 // 6. 文件名含文档标题与日期；非法字符替换
 {
   const name = reportFilename('a/b:c*d?e', now)

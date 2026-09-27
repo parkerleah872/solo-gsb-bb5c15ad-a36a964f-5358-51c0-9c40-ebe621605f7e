@@ -28,6 +28,23 @@ if (typeof window.Element.prototype.scrollIntoView !== 'function') {
   window.Element.prototype.scrollIntoView = function scrollIntoView() {}
 }
 
+// jsdom 不实现 Range.getBoundingClientRect；拖选创建标注时浮动面板定位会调用
+if (typeof window.Range.prototype.getBoundingClientRect !== 'function') {
+  window.Range.prototype.getBoundingClientRect = function getBoundingClientRect() {
+    return {
+      top: 0,
+      bottom: 0,
+      left: 0,
+      right: 0,
+      width: 0,
+      height: 0,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect
+  }
+}
+
 const React = (await import('react')).default
 const { createRoot } = await import('react-dom/client')
 const { default: App } = await import('../src/App')
@@ -2125,4 +2142,109 @@ console.log('  ✓ 旧数据无损兼容并自动补齐冲突字段、标注关�
 root4.unmount()
 container4.remove()
 container3.remove()
+
+// 阅读视图空白回归：没有有效已绑定标注时，原文必须完整渲染且可交互
+{
+  const { setSelectionRange } = await import('../src/lib/dom')
+
+  // 1) 零标注：新录入原文后阅读视图显示完整原文，普通文本上拖选即可创建首条标注
+  const plainText = '第一段测试原文。第二段测试原文。第三段结束。'
+  localStorage.setItem(
+    'anchor-annotation-console:v1',
+    JSON.stringify({
+      title: '零标注文档',
+      text: plainText,
+      updatedAt: Date.now(),
+      annotations: [],
+    }),
+  )
+  const zc = document.createElement('div')
+  zc.id = 'rootzero'
+  document.body.appendChild(zc)
+  const zr = createRoot(zc)
+  await new Promise<void>((resolve) => {
+    zr.render(React.createElement(React.StrictMode, null, React.createElement(App)))
+    setTimeout(resolve, 400)
+  })
+
+  const ztv = zc.querySelector('.text-view') as HTMLElement
+  assert.ok(ztv, '零标注时应渲染阅读视图而非空白')
+  assert.strictEqual(ztv.textContent, plainText, '零标注时阅读视图应显示完整原文')
+
+  // 普通文本上拖选 [0,5) → 弹出创建表单 → 填标签保存 → 首条标注落地并高亮
+  assert.ok(setSelectionRange(ztv, 0, 5), '普通文本上应能设置选区')
+  ztv.dispatchEvent(new window.MouseEvent('mouseup', { bubbles: true }))
+  await waitFor(() => !!zc.querySelector('.annotation-form'))
+  const tagInput = zc.querySelector('.annotation-form .tag-chips input') as HTMLInputElement
+  assert.ok(tagInput, '创建表单应渲染标签输入')
+  const setTagValue = Object.getOwnPropertyDescriptor(
+    window.HTMLInputElement.prototype,
+    'value',
+  )!.set!
+  setTagValue.call(tagInput, '重点')
+  tagInput.dispatchEvent(new window.Event('input', { bubbles: true }))
+  await new Promise<void>((r) => setTimeout(r, 100))
+  tagInput.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  await new Promise<void>((r) => setTimeout(r, 100))
+  const saveBtn = [...zc.querySelectorAll('.annotation-form button')].find(
+    (b) => b.textContent?.trim() === '保存标注',
+  ) as HTMLButtonElement
+  assert.ok(saveBtn, '创建表单应有「保存标注」按钮')
+  saveBtn.click()
+  await waitFor(() => {
+    const d = JSON.parse(localStorage.getItem('anchor-annotation-console:v1')!)
+    return Array.isArray(d.annotations) && d.annotations.length === 1
+  })
+  const afterCreate = JSON.parse(localStorage.getItem('anchor-annotation-console:v1')!)
+  assert.strictEqual(afterCreate.annotations[0].quote, plainText.slice(0, 5))
+  assert.strictEqual(afterCreate.annotations[0].status, 'bound')
+  assert.deepStrictEqual(afterCreate.annotations[0].tags, ['重点'])
+  await waitFor(() => !!zc.querySelector('.text-view mark.hl'))
+  console.log('  ✓ 零标注时阅读视图完整渲染，普通文本拖选可创建首条标注')
+  zr.unmount()
+  zc.remove()
+
+  // 2) 仅剩待处理标注：阅读视图仍显示完整原文，重绑入口可用
+  const pendingOnlyText = '甲乙丙丁戊己庚辛壬癸，子丑寅卯辰巳午未申酉。'
+  localStorage.setItem(
+    'anchor-annotation-console:v1',
+    JSON.stringify({
+      title: '仅待处理文档',
+      text: pendingOnlyText,
+      updatedAt: Date.now(),
+      annotations: [
+        {
+          id: 'pend_only',
+          quote: '已消失的引文',
+          start: 0,
+          end: 0,
+          note: '',
+          tags: ['遗留'],
+          status: 'pending',
+          createdAt: 1,
+          updatedAt: 1,
+          contextBefore: '',
+          contextAfter: '',
+          pendingReason: '原文中已找不到该引文，需要手动重新选择',
+        },
+      ],
+    }),
+  )
+  const pc = document.createElement('div')
+  pc.id = 'rootpend'
+  document.body.appendChild(pc)
+  const pr = createRoot(pc)
+  await new Promise<void>((resolve) => {
+    pr.render(React.createElement(React.StrictMode, null, React.createElement(App)))
+    setTimeout(resolve, 400)
+  })
+  const ptv = pc.querySelector('.text-view') as HTMLElement
+  assert.ok(ptv, '仅待处理标注时应渲染阅读视图而非空白')
+  assert.strictEqual(ptv.textContent, pendingOnlyText, '仅待处理标注时阅读视图应显示完整原文')
+  assert.ok(pc.innerHTML.includes('重新选择片段'), '待处理标注应保留重绑入口')
+  console.log('  ✓ 仅待处理标注时阅读视图仍显示完整原文')
+  pr.unmount()
+  pc.remove()
+}
+
 console.log('\n全部渲染冒烟测试通过')
